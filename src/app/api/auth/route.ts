@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { SESSION_COOKIE, checkRateLimit, sessionFromCookieHeader, signSession, checkPassword, clearRateLimit } from '@/lib/auth';
 
-export const runtime = 'nodejs';
+export const runtime = 'edge';
 
 // ===== 硬编码密码（Workers 环境读不到 process.env）=====
 const HARD_PASSWORD = '123456789';
