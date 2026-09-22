@@ -1,9 +1,10 @@
-// ===== 硬编码密码（Cloudflare Workers 读不到 process.env.PASSWORD）=====
-const PASSWORD = '123456789a';
-// =====================================================================
+import crypto from 'node:crypto';
 
 export const SESSION_COOKIE = 'ltv_session';
 const SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 天
+
+// 硬编码密码
+const PASSWORD = '123456789';
 
 export function getPassword(): string {
   return PASSWORD;
@@ -13,88 +14,45 @@ export function isPasswordConfigured(): boolean {
   return getPassword().length > 0;
 }
 
-// --- Web Crypto API（Edge Runtime 全局可用，无需 import）---
-
-async function sha256(data: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(data));
-  return Array.from(new Uint8Array(hashBuffer))
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
+function getSecret(): string {
+  if (process.env.PROXY_SECRET) return process.env.PROXY_SECRET;
+  return crypto.createHash('sha256').update(getPassword() + ':libretv::session-salt').digest('hex');
 }
 
-async function hmacSha256(secret: string, message: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const keyBuffer = encoder.encode(secret);
-  const msgBuffer = encoder.encode(message);
-
-  const cryptoKey = await crypto.subtle.importKey(
-    'raw',
-    keyBuffer,
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
-
-  const sigBuffer = await crypto.subtle.sign('HMAC', cryptoKey, msgBuffer);
-  return Array.from(new Uint8Array(sigBuffer))
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
+function hmac(payload: string): string {
+  return crypto.createHmac('sha256', getSecret()).update(payload).digest('hex');
 }
 
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  const encoder = new TextEncoder();
-  const bufA = encoder.encode(a);
-  const bufB = encoder.encode(b);
-  let result = 0;
-  for (let i = 0; i < bufA.length; i++) {
-    result |= bufA[i] ^ bufB[i];
-  }
-  return result === 0;
-}
-
-// --- 会话逻辑 ---
-
-let cachedSecret: string | null = null;
-
-async function getSecret(): Promise<string> {
-  if (cachedSecret) return cachedSecret;
-  cachedSecret = await sha256(getPassword() + ':libretv::session-salt');
-  return cachedSecret;
-}
-
-export async function signSession(): Promise<{ token: string; expiresAt: number }> {
+export function signSession(): { token: string; expiresAt: number } {
   const expiresAt = Date.now() + SESSION_TTL_MS;
   const payload = String(expiresAt);
-  const secret = await getSecret();
-  const sig = await hmacSha256(secret, payload);
-  return { token: `${payload}.${sig}`, expiresAt };
+  return { token: `${payload}.${hmac(payload)}`, expiresAt };
 }
 
-export async function verifySession(token: string | undefined | null): Promise<boolean> {
+export function verifySession(token: string | undefined | null): boolean {
   if (!token) return false;
   const dot = token.lastIndexOf('.');
   if (dot <= 0) return false;
   const payload = token.slice(0, dot);
   const sig = token.slice(dot + 1);
-  const secret = await getSecret();
-  const expected = await hmacSha256(secret, payload);
-  if (!timingSafeEqual(sig, expected)) return false;
+  const expected = hmac(payload);
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
   const expiresAt = parseInt(payload, 10);
   if (!Number.isFinite(expiresAt)) return false;
   return Date.now() < expiresAt;
 }
 
-export async function checkPassword(input: string): Promise<boolean> {
+export function checkPassword(input: string): boolean {
   const password = getPassword();
   if (!password) return false;
-  const inputHash = await sha256(input);
-  const passwordHash = await sha256(password);
-  return timingSafeEqual(inputHash, passwordHash);
+  const a = crypto.createHash('sha256').update(input).digest();
+  const b = crypto.createHash('sha256').update(password).digest();
+  return crypto.timingSafeEqual(a, b);
 }
 
-export async function sessionFromCookieHeader(cookieHeader: string | null): Promise<boolean> {
+export function sessionFromCookieHeader(cookieHeader: string | null): boolean {
   if (!cookieHeader) return false;
   const cookies = cookieHeader.split(';');
   for (const c of cookies) {
