@@ -1,16 +1,14 @@
 import { NextResponse } from 'next/server';
-import { SESSION_COOKIE, checkRateLimit, sessionFromCookieHeader, signSession, checkPassword, clearRateLimit, isPasswordConfigured } from '@/lib/auth';
+import { SESSION_COOKIE, checkRateLimit, sessionFromCookieHeader, signSession, checkPassword, clearRateLimit } from '@/lib/auth';
 
 export const runtime = 'nodejs';
 
-export async function POST(req: Request) {
-  if (!isPasswordConfigured()) {
-    return NextResponse.json(
-      { success: false, error: '服务器未设置 PASSWORD 环境变量，请联系管理员配置' },
-      { status: 503 }
-    );
-  }
+// ===== 硬编码密码（Workers 环境读不到 process.env）=====
+const HARD_PASSWORD = '123456789a';
+// =====================================================
 
+export async function POST(req: Request) {
+  // 不再依赖 isPasswordConfigured()，直接认为已配置
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || req.headers.get('x-real-ip') || 'unknown';
   if (!checkRateLimit(ip)) {
     return NextResponse.json(
@@ -27,15 +25,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: false, error: '请求格式错误' }, { status: 400 });
   }
 
-  if (!checkPassword(password)) {
+  // 用硬编码值校验
+  if (password !== HARD_PASSWORD) {
     return NextResponse.json({ success: false, error: '密码错误' }, { status: 401 });
   }
 
   clearRateLimit(ip);
   const { token, expiresAt } = signSession();
   const res = NextResponse.json({ success: true });
-  // Cookie Secure 策略：COOKIE_SECURE 环境变量显式覆盖；否则按 x-forwarded-proto 推导。
-  // 不能依赖 req.url——Next.js Route Handler 中它是内部转发地址，并非用户侧的原始协议。
   const secure = process.env.COOKIE_SECURE === 'true'
     ? true
     : process.env.COOKIE_SECURE === 'false'
@@ -51,13 +48,11 @@ export async function POST(req: Request) {
   return res;
 }
 
-/** GET：查询当前会话状态 */
 export async function GET(req: Request) {
   const verified = sessionFromCookieHeader(req.headers.get('cookie'));
   return NextResponse.json({ success: true, verified });
 }
 
-/** DELETE：登出 */
 export async function DELETE() {
   const res = NextResponse.json({ success: true });
   res.cookies.set(SESSION_COOKIE, '', { httpOnly: true, maxAge: 0, path: '/' });
