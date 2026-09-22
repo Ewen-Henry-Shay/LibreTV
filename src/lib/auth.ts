@@ -1,4 +1,4 @@
-import crypto from 'node:crypto';
+import crypto from 'crypto';
 
 // ===== 硬编码密码（Cloudflare Workers 读不到 process.env.PASSWORD）=====
 const PASSWORD = '123456789';
