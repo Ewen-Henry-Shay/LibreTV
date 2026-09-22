@@ -1,5 +1,5 @@
 // ===== 硬编码密码（Cloudflare Workers 读不到 process.env.PASSWORD）=====
-const PASSWORD = '123456789a';
+const PASSWORD = '123456789';
 // ======================================================================
 
 export const SESSION_COOKIE = 'ltv_session';
