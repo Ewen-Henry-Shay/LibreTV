@@ -1,14 +1,17 @@
 import { NextResponse } from 'next/server';
-import { SESSION_COOKIE, checkRateLimit, sessionFromCookieHeader, signSession, checkPassword, clearRateLimit } from '@/lib/auth';
+import {
+  SESSION_COOKIE,
+  checkRateLimit,
+  signSession,
+  checkPassword,
+  clearRateLimit,
+} from '@/lib/auth';
 
-export const runtime = 'edge';
-
-// ===== 硬编码密码（Workers 环境读不到 process.env）=====
-const HARD_PASSWORD = '123456789';
-// =====================================================
+export const runtime = 'edge';  // 改成 edge，删掉 nodejs
 
 export async function POST(req: Request) {
-  // 不再依赖 isPasswordConfigured()，直接认为已配置
+  // 删掉 isPasswordConfigured() 的 503 判断（已硬编码密码，永远配置好了）
+
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || req.headers.get('x-real-ip') || 'unknown';
   if (!checkRateLimit(ip)) {
     return NextResponse.json(
@@ -25,31 +28,31 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: false, error: '请求格式错误' }, { status: 400 });
   }
 
-  // 用硬编码值校验
-  if (password !== HARD_PASSWORD) {
+  // 注意这里加了 await
+  if (!await checkPassword(password)) {
     return NextResponse.json({ success: false, error: '密码错误' }, { status: 401 });
   }
 
   clearRateLimit(ip);
-  const { token, expiresAt } = signSession();
+  // 注意这里也加了 await
+  const { token, expiresAt } = await signSession();
   const res = NextResponse.json({ success: true });
-  const secure = true
-    ? true
-    : process.env.COOKIE_SECURE === 'false'
-      ? false
-      : (req.headers.get('x-forwarded-proto')?.split(',')[0]?.trim() ?? 'http') === 'https';
+
+  // Cookie Secure 直接写死 true（你的域名是 https）
   res.cookies.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: 'lax',
-    secure,
+    secure: true,
     maxAge: Math.floor((expiresAt - Date.now()) / 1000),
     path: '/',
   });
   return res;
 }
 
+// GET 和 DELETE 如果也用了 sessionFromCookieHeader，同样需要改 async/await
 export async function GET(req: Request) {
-  const verified = sessionFromCookieHeader(req.headers.get('cookie'));
+  // sessionFromCookieHeader 现在返回 Promise<boolean>，需要 await
+  const verified = await sessionFromCookieHeader(req.headers.get('cookie'));
   return NextResponse.json({ success: true, verified });
 }
 
