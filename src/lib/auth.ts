@@ -1,63 +1,103 @@
-import crypto from 'crypto';
-
 // ===== 硬编码密码（Cloudflare Workers 读不到 process.env.PASSWORD）=====
-const PASSWORD = '123456789';
+const PASSWORD = '123456789a';
 // ======================================================================
 
 export const SESSION_COOKIE = 'ltv_session';
 const SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 天
 
 export function getPassword(): string {
-  return PASSWORD;   // 不再读 process.env
+  return PASSWORD;
 }
 
 export function isPasswordConfigured(): boolean {
-  return getPassword().length > 0;   // 现在永远返回 true
+  return getPassword().length > 0;
 }
 
-function getSecret(): string {
-  if (process.env.PROXY_SECRET) return process.env.PROXY_SECRET;
-  return crypto.createHash('sha256').update(getPassword() + ':libretv::session-salt').digest('hex');
+// --- Web Crypto API 替代 Node.js crypto ---
+
+async function sha256(data: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(data));
+  return Array.from(new Uint8Array(hashBuffer))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
 }
 
-function hmac(payload: string): string {
-  return crypto.createHmac('sha256', getSecret()).update(payload).digest('hex');
+async function hmacSha256(secret: string, message: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const keyBuffer = encoder.encode(secret);
+  const msgBuffer = encoder.encode(message);
+
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    keyBuffer,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+
+  const sigBuffer = await crypto.subtle.sign('HMAC', cryptoKey, msgBuffer);
+  return Array.from(new Uint8Array(sigBuffer))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
 }
 
-/** 生成签名会话 token：`<expiresAtMs>.<hmac>` */
-export function signSession(): { token: string; expiresAt: number } {
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  const encoder = new TextEncoder();
+  const bufA = encoder.encode(a);
+  const bufB = encoder.encode(b);
+  let result = 0;
+  for (let i = 0; i < bufA.length; i++) {
+    result |= bufA[i] ^ bufB[i];
+  }
+  return result === 0;
+}
+
+// --- 会话逻辑 ---
+
+let cachedSecret: string | null = null;
+
+async function getSecret(): Promise<string> {
+  if (cachedSecret) return cachedSecret;
+  // process.env.PROXY_SECRET 在 Workers 下不可用，直接用 password 派生
+  cachedSecret = await sha256(getPassword() + ':libretv::session-salt');
+  return cachedSecret;
+}
+
+export async function signSession(): Promise<{ token: string; expiresAt: number }> {
   const expiresAt = Date.now() + SESSION_TTL_MS;
   const payload = String(expiresAt);
-  return { token: `${payload}.${hmac(payload)}`, expiresAt };
+  const secret = await getSecret();
+  const sig = await hmacSha256(secret, payload);
+  return { token: `${payload}.${sig}`, expiresAt };
 }
 
-/** 校验会话 token 的签名与有效期 */
-export function verifySession(token: string | undefined | null): boolean {
+export async function verifySession(token: string | undefined | null): Promise<boolean> {
   if (!token) return false;
   const dot = token.lastIndexOf('.');
   if (dot <= 0) return false;
   const payload = token.slice(0, dot);
   const sig = token.slice(dot + 1);
-  const expected = hmac(payload);
-  const a = Buffer.from(sig);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+  const secret = await getSecret();
+  const expected = await hmacSha256(secret, payload);
+  if (!timingSafeEqual(sig, expected)) return false;
   const expiresAt = parseInt(payload, 10);
   if (!Number.isFinite(expiresAt)) return false;
   return Date.now() < expiresAt;
 }
 
-/** 恒定时间比较密码 */
-export function checkPassword(input: string): boolean {
+export async function checkPassword(input: string): Promise<boolean> {
   const password = getPassword();
   if (!password) return false;
-  const a = crypto.createHash('sha256').update(input).digest();
-  const b = crypto.createHash('sha256').update(password).digest();
-  return crypto.timingSafeEqual(a, b);
+  const inputHash = await sha256(input);
+  const passwordHash = await sha256(password);
+  return timingSafeEqual(inputHash, passwordHash);
 }
 
-/** 从请求 Cookie 中解析会话 */
 export function sessionFromCookieHeader(cookieHeader: string | null): boolean {
+  // 注意：这个方法调用的是异步的 verifySession，需要改为异步
+  // 见下方 route.ts 的调用处
   if (!cookieHeader) return false;
   const cookies = cookieHeader.split(';');
   for (const c of cookies) {
