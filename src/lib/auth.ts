@@ -1,23 +1,18 @@
 import crypto from 'node:crypto';
 
-/**
- * 会话鉴权：httpOnly cookie + HMAC 签名。
- *
- * 相比旧版的改进：
- * - 页面源码不再下发 sha256(password)，前端拿不到任何可重放的凭证；
- * - 兼容模式「哈希即凭证」被彻底移除；
- * - 登录接口只接受 POST body，不再把明文密码放 query。
- */
+// ===== 硬编码密码（Cloudflare Workers 读不到 process.env.PASSWORD）=====
+const PASSWORD = '123456789a';
+// ======================================================================
 
 export const SESSION_COOKIE = 'ltv_session';
 const SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 天
 
 export function getPassword(): string {
-  return process.env.PASSWORD || '';
+  return PASSWORD;   // 不再读 process.env
 }
 
 export function isPasswordConfigured(): boolean {
-  return getPassword().length > 0;
+  return getPassword().length > 0;   // 现在永远返回 true
 }
 
 function getSecret(): string {
@@ -52,7 +47,7 @@ export function verifySession(token: string | undefined | null): boolean {
   return Date.now() < expiresAt;
 }
 
-/** 恒定时间比较密码（比较 sha256 摘要避免长度泄漏） */
+/** 恒定时间比较密码 */
 export function checkPassword(input: string): boolean {
   const password = getPassword();
   if (!password) return false;
@@ -76,7 +71,7 @@ export function sessionFromCookieHeader(cookieHeader: string | null): boolean {
   return false;
 }
 
-// —— 登录速率限制（内存实现，单实例部署足够；多实例可换 Redis） ——
+// —— 登录速率限制 ——
 
 const attemptMap = new Map<string, { count: number; resetAt: number }>();
 const MAX_ATTEMPTS = 10;
@@ -98,7 +93,6 @@ export function clearRateLimit(ip: string): void {
   attemptMap.delete(ip);
 }
 
-// 定期清理过期限流记录，避免长期运行下 Map 膨胀
 if (typeof setInterval === 'function') {
   const timer = setInterval(() => {
     const now = Date.now();
@@ -106,6 +100,5 @@ if (typeof setInterval === 'function') {
       if (now > entry.resetAt) attemptMap.delete(ip);
     }
   }, 60 * 1000);
-  // 不阻止 Node 进程退出
   if (typeof timer.unref === 'function') timer.unref();
 }
