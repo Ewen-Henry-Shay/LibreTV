@@ -1,6 +1,6 @@
 // ===== 硬编码密码（Cloudflare Workers 读不到 process.env.PASSWORD）=====
-const PASSWORD = '123456789';
-// ======================================================================
+const PASSWORD = '123456789a';
+// =====================================================================
 
 export const SESSION_COOKIE = 'ltv_session';
 const SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 天
@@ -13,7 +13,7 @@ export function isPasswordConfigured(): boolean {
   return getPassword().length > 0;
 }
 
-// --- Web Crypto API 替代 Node.js crypto ---
+// --- Web Crypto API（Edge Runtime 全局可用，无需 import）---
 
 async function sha256(data: string): Promise<string> {
   const encoder = new TextEncoder();
@@ -60,7 +60,6 @@ let cachedSecret: string | null = null;
 
 async function getSecret(): Promise<string> {
   if (cachedSecret) return cachedSecret;
-  // process.env.PROXY_SECRET 在 Workers 下不可用，直接用 password 派生
   cachedSecret = await sha256(getPassword() + ':libretv::session-salt');
   return cachedSecret;
 }
@@ -95,9 +94,7 @@ export async function checkPassword(input: string): Promise<boolean> {
   return timingSafeEqual(inputHash, passwordHash);
 }
 
-export function sessionFromCookieHeader(cookieHeader: string | null): boolean {
-  // 注意：这个方法调用的是异步的 verifySession，需要改为异步
-  // 见下方 route.ts 的调用处
+export async function sessionFromCookieHeader(cookieHeader: string | null): Promise<boolean> {
   if (!cookieHeader) return false;
   const cookies = cookieHeader.split(';');
   for (const c of cookies) {
