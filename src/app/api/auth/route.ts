@@ -2,15 +2,23 @@ import { NextResponse } from 'next/server';
 import {
   SESSION_COOKIE,
   checkRateLimit,
+  sessionFromCookieHeader,
   signSession,
   checkPassword,
   clearRateLimit,
-  sessionFromCookieHeader,
+  isPasswordConfigured,
 } from '@/lib/auth';
 
-export const runtime = 'edge';
+// 不声明 runtime，使用默认的 Node.js 运行时
 
 export async function POST(req: Request) {
+  if (!isPasswordConfigured()) {
+    return NextResponse.json(
+      { success: false, error: '服务器未设置 PASSWORD 环境变量，请联系管理员配置' },
+      { status: 503 }
+    );
+  }
+
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || req.headers.get('x-real-ip') || 'unknown';
   if (!checkRateLimit(ip)) {
     return NextResponse.json(
@@ -27,12 +35,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: false, error: '请求格式错误' }, { status: 400 });
   }
 
-  if (!await checkPassword(password)) {
+  if (!checkPassword(password)) {
     return NextResponse.json({ success: false, error: '密码错误' }, { status: 401 });
   }
 
   clearRateLimit(ip);
-  const { token, expiresAt } = await signSession();
+  const { token, expiresAt } = signSession();
   const res = NextResponse.json({ success: true });
   res.cookies.set(SESSION_COOKIE, token, {
     httpOnly: true,
@@ -45,7 +53,7 @@ export async function POST(req: Request) {
 }
 
 export async function GET(req: Request) {
-  const verified = await sessionFromCookieHeader(req.headers.get('cookie'));
+  const verified = sessionFromCookieHeader(req.headers.get('cookie'));
   return NextResponse.json({ success: true, verified });
 }
 
