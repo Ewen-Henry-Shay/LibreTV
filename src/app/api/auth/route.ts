@@ -33,7 +33,7 @@ export async function POST(req: Request) {
   clearRateLimit(ip);
   const { token, expiresAt } = signSession();
   const res = NextResponse.json({ success: true });
-  const secure = process.env.COOKIE_SECURE === 'true'
+  const secure = true
     ? true
     : process.env.COOKIE_SECURE === 'false'
       ? false
