@@ -4,7 +4,7 @@ import { SESSION_COOKIE, checkRateLimit, sessionFromCookieHeader, signSession, c
 export const runtime = 'nodejs';
 
 // ===== 硬编码密码（Workers 环境读不到 process.env）=====
-const HARD_PASSWORD = '123456789a';
+const HARD_PASSWORD = '123456789';
 // =====================================================
 
 export async function POST(req: Request) {
